@@ -417,9 +417,14 @@ static bool dualsense_init(struct dualsense *ds, const char *serial)
     wchar_t *serial_number = dev->serial_number;
 
     if (!serial_number || wcslen(serial_number) != 17) {
-#ifndef __APPLE__
+#ifdef __APPLE__
         /* On macOS USB, serial number is often not exposed via IOKit — this is normal */
-        fprintf(stderr, "Invalid device serial number: %ls\n", serial_number);
+#else
+        if (serial_number) {
+            fprintf(stderr, "Invalid device serial number: %ls\n", serial_number);
+        } else {
+            fprintf(stderr, "Missing device serial number\n");
+        }
 #endif
         // Let's just fake serial number as everything will still work
         serial_number = L"00:00:00:00:00:00";
@@ -1181,6 +1186,12 @@ static int command_monitor(void)
     IOReturn ret = IOHIDManagerOpen(manager, kIOHIDOptionsTypeNone);
     if (ret != kIOReturnSuccess) {
         fprintf(stderr, "Failed to open IOHIDManager: 0x%x\n", ret);
+        CFRelease(match_array);
+        CFRelease(match_edge);
+        CFRelease(match_ds);
+        CFRelease(product_id_edge);
+        CFRelease(product_id_ds);
+        CFRelease(vendor_id);
         CFRelease(manager);
         return 1;
     }
@@ -1594,6 +1605,11 @@ static int command_update(struct dualsense *ds, const char *path)
 
 	if (data[0] == DS_INPUT_REPORT_USB && res == DS_INPUT_REPORT_USB_SIZE) {
 		ds_report = (struct dualsense_input_report *)&data[1];
+#ifdef __APPLE__
+	} else if (res == DS_INPUT_REPORT_USB_SIZE - 1) {
+		/* macOS IOKit strips report ID */
+		ds_report = (struct dualsense_input_report *)&data[0];
+#endif
 	} else {
 		fprintf(stderr, "Unhandled report ID %d\n", (int)data[0]);
 		return 3;

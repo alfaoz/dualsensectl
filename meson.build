@@ -17,14 +17,14 @@ deps = []
 if host_machine.system() == 'darwin'
   # macOS: use generic hidapi (IOKit backend), no udev
   hidapi = dependency('hidapi')
-  deps += hidapi
+  deps += [hidapi]
 
   # Link IOKit and CoreFoundation frameworks for the monitor command
   iokit = dependency('appleframeworks', modules: ['IOKit', 'CoreFoundation'])
-  deps += iokit
+  deps += [iokit]
 else
   # Linux: use hidapi-hidraw backend + libudev
-  extra_args += '-Wl,--exclude-libs=ALL'
+  extra_args += ['-Wl,--exclude-libs=ALL']
   hidapi_hidraw = dependency('hidapi-hidraw')
   udev = dependency('libudev')
   deps += [hidapi_hidraw, udev]
