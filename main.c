@@ -14,15 +14,30 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
-#include <poll.h>
 #include <sys/wait.h>
+#include <time.h>
 
+#ifdef __APPLE__
+#include <IOKit/hid/IOHIDManager.h>
+#include <CoreFoundation/CoreFoundation.h>
+#else
+#include <poll.h>
 #include <threads.h>
-
-#include <hidapi/hidapi.h>
 #include <libudev.h>
+#endif
+
+#ifdef __APPLE__
+#include <hidapi.h>
+#else
+#include <hidapi/hidapi.h>
+#endif
 
 #include "crc32.h"
+
+/* Portable thrd_sleep replacement using nanosleep on macOS */
+#ifdef __APPLE__
+#define thrd_sleep(ts, rem) nanosleep((ts), (rem))
+#endif
 
 #define DS_VENDOR_ID 0x054c
 #define DS_PRODUCT_ID 0x0ce6
@@ -401,8 +416,11 @@ static bool dualsense_init(struct dualsense *ds, const char *serial)
 
     wchar_t *serial_number = dev->serial_number;
 
-    if (wcslen(serial_number) != 17) {
+    if (!serial_number || wcslen(serial_number) != 17) {
+#ifndef __APPLE__
+        /* On macOS USB, serial number is often not exposed via IOKit — this is normal */
         fprintf(stderr, "Invalid device serial number: %ls\n", serial_number);
+#endif
         // Let's just fake serial number as everything will still work
         serial_number = L"00:00:00:00:00:00";
     }
@@ -475,12 +493,29 @@ static int command_battery(struct dualsense *ds)
 
     if (!ds->bt && data[0] == DS_INPUT_REPORT_USB && res == DS_INPUT_REPORT_USB_SIZE) {
         ds_report = (struct dualsense_input_report *)&data[1];
+#ifdef __APPLE__
+    } else if (!ds->bt && res == DS_INPUT_REPORT_USB_SIZE - 1) {
+        /* macOS IOKit strips report ID on USB */
+        ds_report = (struct dualsense_input_report *)&data[0];
+    } else if (ds->bt && res == DS_INPUT_REPORT_BT_SIZE - 4 - 1) {
+        /* macOS IOKit strips report ID on BT; skip 1 byte (tag area) */
+        ds_report = (struct dualsense_input_report *)&data[1];
+    } else if (ds->bt && res == DS_INPUT_REPORT_BT_SIZE - 1) {
+        /* macOS IOKit strips report ID on BT, but keeps CRC */
+        ds_report = (struct dualsense_input_report *)&data[1];
+#endif
     } else if (ds->bt && data[0] == DS_INPUT_REPORT_BT && res == DS_INPUT_REPORT_BT_SIZE) {
         /* Last 4 bytes of input report contain crc32 */
         /* uint32_t report_crc = *(uint32_t*)&data[res - 4]; */
         ds_report = (struct dualsense_input_report *)&data[2];
     } else {
-        fprintf(stderr, "Unhandled report ID %d\n", (int)data[0]);
+#ifdef __APPLE__
+        if (ds->bt && res <= 10) {
+            fprintf(stderr, "Battery reading requires USB connection on macOS (Bluetooth only provides simple reports)\n");
+            return 2;
+        }
+#endif
+        fprintf(stderr, "Unhandled report ID %d (size %d, bt=%d)\n", (int)data[0], res, ds->bt);
         return 3;
     }
 
@@ -1066,6 +1101,108 @@ static void run_sh_command(const char *command, const char *serial_number)
     }
 }
 
+#ifdef __APPLE__
+/* macOS: IOKit-based device monitoring */
+
+static void get_serial_from_hid_device(IOHIDDeviceRef device, char serial_number[18])
+{
+    CFStringRef serial = IOHIDDeviceGetProperty(device, CFSTR(kIOHIDSerialNumberKey));
+    if (serial && CFGetTypeID(serial) == CFStringGetTypeID()) {
+        char buf[64] = {0};
+        CFStringGetCString(serial, buf, sizeof(buf), kCFStringEncodingUTF8);
+        /* Serial may come as "aa-bb-cc-dd-ee-ff" or "aa:bb:cc:dd:ee:ff" */
+        size_t len = strlen(buf);
+        if (len == 17) {
+            /* Replace dashes with colons if needed, uppercase */
+            for (int i = 0; i < 17; i++) {
+                if (buf[i] == '-') buf[i] = ':';
+                serial_number[i] = toupper(buf[i]);
+            }
+            serial_number[17] = '\0';
+            return;
+        }
+    }
+    strncpy(serial_number, "00:00:00:00:00:00", 18);
+}
+
+static void iokit_device_added(void *context, IOReturn result, void *sender, IOHIDDeviceRef device)
+{
+    (void)context; (void)result; (void)sender;
+    char serial_number[18] = "00:00:00:00:00:00";
+    get_serial_from_hid_device(device, serial_number);
+    if (sh_command_add) {
+        run_sh_command(sh_command_add, serial_number);
+    }
+}
+
+static void iokit_device_removed(void *context, IOReturn result, void *sender, IOHIDDeviceRef device)
+{
+    (void)context; (void)result; (void)sender;
+    char serial_number[18] = "00:00:00:00:00:00";
+    get_serial_from_hid_device(device, serial_number);
+    if (sh_command_remove) {
+        run_sh_command(sh_command_remove, serial_number);
+    }
+}
+
+static int command_monitor(void)
+{
+    IOHIDManagerRef manager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+    if (!manager) {
+        fprintf(stderr, "Failed to create IOHIDManager\n");
+        return 1;
+    }
+
+    /* Match DualSense and DualSense Edge by vendor/product ID */
+    CFNumberRef vendor_id = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &(int){DS_VENDOR_ID});
+    CFNumberRef product_id_ds = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &(int){DS_PRODUCT_ID});
+    CFNumberRef product_id_edge = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &(int){DS_EDGE_PRODUCT_ID});
+
+    CFDictionaryRef match_ds = CFDictionaryCreate(kCFAllocatorDefault,
+        (const void *[]){ CFSTR(kIOHIDVendorIDKey), CFSTR(kIOHIDProductIDKey) },
+        (const void *[]){ vendor_id, product_id_ds },
+        2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+
+    CFDictionaryRef match_edge = CFDictionaryCreate(kCFAllocatorDefault,
+        (const void *[]){ CFSTR(kIOHIDVendorIDKey), CFSTR(kIOHIDProductIDKey) },
+        (const void *[]){ vendor_id, product_id_edge },
+        2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+
+    CFDictionaryRef matches[] = { match_ds, match_edge };
+    CFArrayRef match_array = CFArrayCreate(kCFAllocatorDefault, (const void **)matches, 2, &kCFTypeArrayCallBacks);
+
+    IOHIDManagerSetDeviceMatchingMultiple(manager, match_array);
+
+    IOHIDManagerRegisterDeviceMatchingCallback(manager, iokit_device_added, NULL);
+    IOHIDManagerRegisterDeviceRemovalCallback(manager, iokit_device_removed, NULL);
+
+    IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+
+    IOReturn ret = IOHIDManagerOpen(manager, kIOHIDOptionsTypeNone);
+    if (ret != kIOReturnSuccess) {
+        fprintf(stderr, "Failed to open IOHIDManager: 0x%x\n", ret);
+        CFRelease(manager);
+        return 1;
+    }
+
+    /* Run the event loop — blocks until interrupted */
+    CFRunLoopRun();
+
+    IOHIDManagerClose(manager, kIOHIDOptionsTypeNone);
+    CFRelease(match_array);
+    CFRelease(match_edge);
+    CFRelease(match_ds);
+    CFRelease(product_id_edge);
+    CFRelease(product_id_ds);
+    CFRelease(vendor_id);
+    CFRelease(manager);
+
+    return 0;
+}
+
+#else
+/* Linux: udev-based device monitoring */
+
 static uint32_t read_file_hex(const char *path)
 {
     uint32_t out = 0;
@@ -1201,6 +1338,7 @@ static int command_monitor(void)
 
     return 0;
 }
+#endif /* __APPLE__ */
 
 static int dualsense_send_fw_feature(struct dualsense *ds, uint8_t *buf)
 {
