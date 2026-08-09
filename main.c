@@ -1119,11 +1119,11 @@ static void get_serial_from_hid_device(IOHIDDeviceRef device, char serial_number
         size_t len = strlen(buf);
         if (len == 17) {
             /* Replace dashes with colons if needed, uppercase */
-            for (int i = 0; i < 17; i++) {
+            for (size_t i = 0; i < len; i++) {
                 if (buf[i] == '-') buf[i] = ':';
                 serial_number[i] = toupper(buf[i]);
             }
-            serial_number[17] = '\0';
+            serial_number[len] = '\0';
             return;
         }
     }
@@ -1133,7 +1133,7 @@ static void get_serial_from_hid_device(IOHIDDeviceRef device, char serial_number
 static void iokit_device_added(void *context, IOReturn result, void *sender, IOHIDDeviceRef device)
 {
     (void)context; (void)result; (void)sender;
-    char serial_number[18] = "00:00:00:00:00:00";
+    char serial_number[] = "00:00:00:00:00:00";
     get_serial_from_hid_device(device, serial_number);
     if (sh_command_add) {
         run_sh_command(sh_command_add, serial_number);
@@ -1143,7 +1143,7 @@ static void iokit_device_added(void *context, IOReturn result, void *sender, IOH
 static void iokit_device_removed(void *context, IOReturn result, void *sender, IOHIDDeviceRef device)
 {
     (void)context; (void)result; (void)sender;
-    char serial_number[18] = "00:00:00:00:00:00";
+    char serial_number[] = "00:00:00:00:00:00";
     get_serial_from_hid_device(device, serial_number);
     if (sh_command_remove) {
         run_sh_command(sh_command_remove, serial_number);
@@ -1185,7 +1185,7 @@ static int command_monitor(void)
 
     IOReturn ret = IOHIDManagerOpen(manager, kIOHIDOptionsTypeNone);
     if (ret != kIOReturnSuccess) {
-        fprintf(stderr, "Failed to open IOHIDManager: 0x%x\n", ret);
+        fprintf(stderr, "Failed to open IOHIDManager: %#04x\n", ret);
         CFRelease(match_array);
         CFRelease(match_edge);
         CFRelease(match_ds);
