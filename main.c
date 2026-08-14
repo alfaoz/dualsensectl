@@ -18,8 +18,7 @@
 #include <time.h>
 
 #ifdef __APPLE__
-#include <IOKit/hid/IOHIDManager.h>
-#include <CoreFoundation/CoreFoundation.h>
+#include "macos.h"
 #else
 #include <poll.h>
 #include <threads.h>
@@ -1106,109 +1105,26 @@ static void run_sh_command(const char *command, const char *serial_number)
     }
 }
 
-#ifdef __APPLE__
-/* macOS: IOKit-based device monitoring */
-
-static void get_serial_from_hid_device(IOHIDDeviceRef device, char serial_number[18])
+static void run_add_command(const char *serial_number)
 {
-    CFStringRef serial = IOHIDDeviceGetProperty(device, CFSTR(kIOHIDSerialNumberKey));
-    if (serial && CFGetTypeID(serial) == CFStringGetTypeID()) {
-        char buf[64] = {0};
-        CFStringGetCString(serial, buf, sizeof(buf), kCFStringEncodingUTF8);
-        /* Serial may come as "aa-bb-cc-dd-ee-ff" or "aa:bb:cc:dd:ee:ff" */
-        size_t len = strlen(buf);
-        if (len == 17) {
-            /* Replace dashes with colons if needed, uppercase */
-            for (size_t i = 0; i < len; i++) {
-                if (buf[i] == '-') buf[i] = ':';
-                serial_number[i] = toupper(buf[i]);
-            }
-            serial_number[len] = '\0';
-            return;
-        }
-    }
-    strncpy(serial_number, "00:00:00:00:00:00", 18);
-}
-
-static void iokit_device_added(void *context, IOReturn result, void *sender, IOHIDDeviceRef device)
-{
-    (void)context; (void)result; (void)sender;
-    char serial_number[] = "00:00:00:00:00:00";
-    get_serial_from_hid_device(device, serial_number);
     if (sh_command_add) {
         run_sh_command(sh_command_add, serial_number);
     }
 }
 
-static void iokit_device_removed(void *context, IOReturn result, void *sender, IOHIDDeviceRef device)
+static void run_remove_command(const char *serial_number)
 {
-    (void)context; (void)result; (void)sender;
-    char serial_number[] = "00:00:00:00:00:00";
-    get_serial_from_hid_device(device, serial_number);
     if (sh_command_remove) {
         run_sh_command(sh_command_remove, serial_number);
     }
 }
 
+#ifdef __APPLE__
+
 static int command_monitor(void)
 {
-    IOHIDManagerRef manager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
-    if (!manager) {
-        fprintf(stderr, "Failed to create IOHIDManager\n");
-        return 1;
-    }
-
-    /* Match DualSense and DualSense Edge by vendor/product ID */
-    CFNumberRef vendor_id = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &(int){DS_VENDOR_ID});
-    CFNumberRef product_id_ds = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &(int){DS_PRODUCT_ID});
-    CFNumberRef product_id_edge = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &(int){DS_EDGE_PRODUCT_ID});
-
-    CFDictionaryRef match_ds = CFDictionaryCreate(kCFAllocatorDefault,
-        (const void *[]){ CFSTR(kIOHIDVendorIDKey), CFSTR(kIOHIDProductIDKey) },
-        (const void *[]){ vendor_id, product_id_ds },
-        2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-
-    CFDictionaryRef match_edge = CFDictionaryCreate(kCFAllocatorDefault,
-        (const void *[]){ CFSTR(kIOHIDVendorIDKey), CFSTR(kIOHIDProductIDKey) },
-        (const void *[]){ vendor_id, product_id_edge },
-        2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-
-    CFDictionaryRef matches[] = { match_ds, match_edge };
-    CFArrayRef match_array = CFArrayCreate(kCFAllocatorDefault, (const void **)matches, 2, &kCFTypeArrayCallBacks);
-
-    IOHIDManagerSetDeviceMatchingMultiple(manager, match_array);
-
-    IOHIDManagerRegisterDeviceMatchingCallback(manager, iokit_device_added, NULL);
-    IOHIDManagerRegisterDeviceRemovalCallback(manager, iokit_device_removed, NULL);
-
-    IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
-
-    IOReturn ret = IOHIDManagerOpen(manager, kIOHIDOptionsTypeNone);
-    if (ret != kIOReturnSuccess) {
-        fprintf(stderr, "Failed to open IOHIDManager: %#04x\n", ret);
-        CFRelease(match_array);
-        CFRelease(match_edge);
-        CFRelease(match_ds);
-        CFRelease(product_id_edge);
-        CFRelease(product_id_ds);
-        CFRelease(vendor_id);
-        CFRelease(manager);
-        return 1;
-    }
-
-    /* Run the event loop — blocks until interrupted */
-    CFRunLoopRun();
-
-    IOHIDManagerClose(manager, kIOHIDOptionsTypeNone);
-    CFRelease(match_array);
-    CFRelease(match_edge);
-    CFRelease(match_ds);
-    CFRelease(product_id_edge);
-    CFRelease(product_id_ds);
-    CFRelease(vendor_id);
-    CFRelease(manager);
-
-    return 0;
+    return macos_monitor(DS_VENDOR_ID, DS_PRODUCT_ID, DS_EDGE_PRODUCT_ID,
+                         run_add_command, run_remove_command);
 }
 
 #else
@@ -1286,9 +1202,7 @@ static void add_device(struct udev_device *dev)
     if (!check_dualsense_device(dev, serial_number)) {
         return;
     }
-    if (sh_command_add) {
-        run_sh_command(sh_command_add, serial_number);
-    }
+    run_add_command(serial_number);
 }
 
 static void remove_device(struct udev_device *dev)
@@ -1297,9 +1211,7 @@ static void remove_device(struct udev_device *dev)
     if (!check_dualsense_device(dev, serial_number)) {
         return;
     }
-    if (sh_command_remove) {
-        run_sh_command(sh_command_remove, serial_number);
-    }
+    run_remove_command(serial_number);
 }
 
 static int command_monitor(void)

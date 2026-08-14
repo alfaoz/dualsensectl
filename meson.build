@@ -13,11 +13,13 @@ project(
 cc = meson.get_compiler('c')
 extra_args = ['-DDUALSENSECTL_VERSION="@0@"'.format(meson.project_version())]
 deps = []
+sources = ['main.c']
 
 if host_machine.system() == 'darwin'
   # macOS: use generic hidapi (IOKit backend), no udev
   hidapi = dependency('hidapi')
   deps += [hidapi]
+  sources += ['macos.c']
 
   # Link IOKit and CoreFoundation frameworks for the monitor command
   iokit = dependency('appleframeworks', modules: ['IOKit', 'CoreFoundation'])
@@ -34,7 +36,7 @@ add_project_arguments(extra_args, language: 'c')
 
 executable(
   'dualsensectl',
-  ['main.c'],
+  sources,
   dependencies: deps,
   install: true,
   )
