@@ -33,6 +33,8 @@
 
 #include "crc32.h"
 
+#define YESNO(x) ((x) ? "Yes" : "No")
+
 /* Portable thrd_sleep replacement using nanosleep on macOS */
 #ifdef __APPLE__
 #define thrd_sleep(ts, rem) nanosleep((ts), (rem))
@@ -501,11 +503,9 @@ static int command_battery(struct dualsense *ds)
     } else if (!ds->bt && res == DS_INPUT_REPORT_USB_SIZE - 1) {
         /* macOS IOKit strips report ID on USB */
         ds_report = (struct dualsense_input_report *)&data[0];
-    } else if (ds->bt && res == DS_INPUT_REPORT_BT_SIZE - 4 - 1) {
-        /* macOS IOKit strips report ID on BT; skip 1 byte (tag area) */
-        ds_report = (struct dualsense_input_report *)&data[1];
-    } else if (ds->bt && res == DS_INPUT_REPORT_BT_SIZE - 1) {
-        /* macOS IOKit strips report ID on BT, but keeps CRC */
+    } else if (ds->bt && (res == DS_INPUT_REPORT_BT_SIZE - 4 - 1 ||
+                          res == DS_INPUT_REPORT_BT_SIZE - 1)) {
+        /* macOS IOKit strips the BT report ID, with or without the CRC */
         ds_report = (struct dualsense_input_report *)&data[1];
 #endif
     } else if (ds->bt && data[0] == DS_INPUT_REPORT_BT && res == DS_INPUT_REPORT_BT_SIZE) {
@@ -519,7 +519,7 @@ static int command_battery(struct dualsense *ds)
             return 2;
         }
 #endif
-        fprintf(stderr, "Unhandled report ID %d (size %d, bt=%d)\n", (int)data[0], res, ds->bt);
+        fprintf(stderr, "Unhandled report ID %d (size %d, bt=%s)\n", (int)data[0], res, YESNO(ds->bt));
         return 3;
     }
 

@@ -18,18 +18,19 @@ static void get_serial_from_hid_device(IOHIDDeviceRef device, char serial_number
 {
     CFStringRef serial = IOHIDDeviceGetProperty(device, CFSTR(kIOHIDSerialNumberKey));
     if (serial && CFGetTypeID(serial) == CFStringGetTypeID()) {
-        char buf[64] = {0};
-        CFStringGetCString(serial, buf, sizeof(buf), kCFStringEncodingUTF8);
-        /* Serial may come as "aa-bb-cc-dd-ee-ff" or "aa:bb:cc:dd:ee:ff" */
-        size_t len = strlen(buf);
-        if (len == 17) {
-            /* Replace dashes with colons if needed, uppercase */
-            for (size_t i = 0; i < len; i++) {
-                if (buf[i] == '-') buf[i] = ':';
-                serial_number[i] = toupper(buf[i]);
+        char buf[64];
+        if (CFStringGetCString(serial, buf, sizeof(buf), kCFStringEncodingUTF8)) {
+            /* Serial may come as "aa-bb-cc-dd-ee-ff" or "aa:bb:cc:dd:ee:ff" */
+            size_t len = strlen(buf);
+            if (len == 17) {
+                /* Replace dashes with colons if needed, uppercase */
+                for (size_t i = 0; i < len; i++) {
+                    if (buf[i] == '-') buf[i] = ':';
+                    serial_number[i] = toupper(buf[i]);
+                }
+                serial_number[len] = '\0';
+                return;
             }
-            serial_number[len] = '\0';
-            return;
         }
     }
     strncpy(serial_number, "00:00:00:00:00:00", 18);
