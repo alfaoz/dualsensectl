@@ -35,11 +35,6 @@
 
 #define YESNO(x) ((x) ? "Yes" : "No")
 
-/* Portable thrd_sleep replacement using nanosleep on macOS */
-#ifdef __APPLE__
-#define thrd_sleep(ts, rem) nanosleep((ts), (rem))
-#endif
-
 #define DS_VENDOR_ID 0x054c
 #define DS_PRODUCT_ID 0x0ce6
 #define DS_EDGE_PRODUCT_ID 0x0df2

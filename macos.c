@@ -14,26 +14,23 @@ struct monitor_context {
     macos_device_callback remove_device;
 };
 
-static void get_serial_from_hid_device(IOHIDDeviceRef device, char serial_number[18])
+static void get_serial_from_hid_device(IOHIDDeviceRef device, char *serial_number, size_t size)
 {
+    char buf[64];
     CFStringRef serial = IOHIDDeviceGetProperty(device, CFSTR(kIOHIDSerialNumberKey));
-    if (serial && CFGetTypeID(serial) == CFStringGetTypeID()) {
-        char buf[64];
-        if (CFStringGetCString(serial, buf, sizeof(buf), kCFStringEncodingUTF8)) {
-            /* Serial may come as "aa-bb-cc-dd-ee-ff" or "aa:bb:cc:dd:ee:ff" */
-            size_t len = strlen(buf);
-            if (len == 17) {
-                /* Replace dashes with colons if needed, uppercase */
-                for (size_t i = 0; i < len; i++) {
-                    if (buf[i] == '-') buf[i] = ':';
-                    serial_number[i] = toupper(buf[i]);
-                }
-                serial_number[len] = '\0';
-                return;
-            }
-        }
+    /* Serial may come as "aa-bb-cc-dd-ee-ff" or "aa:bb:cc:dd:ee:ff" */
+    if (!serial || CFGetTypeID(serial) != CFStringGetTypeID() ||
+        !CFStringGetCString(serial, buf, sizeof(buf), kCFStringEncodingUTF8) ||
+        strlen(buf) != 17) {
+        snprintf(serial_number, size, "00:00:00:00:00:00");
+        return;
     }
-    strncpy(serial_number, "00:00:00:00:00:00", 18);
+
+    /* Replace dashes with colons if needed, uppercase */
+    for (size_t i = 0; i < 17; i++) {
+        buf[i] = buf[i] == '-' ? ':' : toupper((unsigned char)buf[i]);
+    }
+    snprintf(serial_number, size, "%s", buf);
 }
 
 static void iokit_device_added(void *context, IOReturn result, void *sender, IOHIDDeviceRef device)
@@ -42,8 +39,8 @@ static void iokit_device_added(void *context, IOReturn result, void *sender, IOH
     (void)sender;
 
     struct monitor_context *monitor = context;
-    char serial_number[] = "00:00:00:00:00:00";
-    get_serial_from_hid_device(device, serial_number);
+    char serial_number[18];
+    get_serial_from_hid_device(device, serial_number, sizeof(serial_number));
     if (monitor->add_device) {
         monitor->add_device(serial_number);
     }
@@ -55,8 +52,8 @@ static void iokit_device_removed(void *context, IOReturn result, void *sender, I
     (void)sender;
 
     struct monitor_context *monitor = context;
-    char serial_number[] = "00:00:00:00:00:00";
-    get_serial_from_hid_device(device, serial_number);
+    char serial_number[18];
+    get_serial_from_hid_device(device, serial_number, sizeof(serial_number));
     if (monitor->remove_device) {
         monitor->remove_device(serial_number);
     }
