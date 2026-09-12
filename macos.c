@@ -9,25 +9,28 @@
 
 #include "macos.h"
 
+/* "AA:BB:CC:DD:EE:FF" */
+#define SERIAL_LEN 17
+
 struct monitor_context {
     macos_device_callback add_device;
     macos_device_callback remove_device;
 };
 
-static void get_serial_from_hid_device(IOHIDDeviceRef device, char *serial_number, size_t size)
+static void get_serial_from_hid_device(IOHIDDeviceRef device, size_t size, char serial_number[static size])
 {
-    char buf[64];
+    char buf[SERIAL_LEN + 1];
     CFStringRef serial = IOHIDDeviceGetProperty(device, CFSTR(kIOHIDSerialNumberKey));
     /* Serial may come as "aa-bb-cc-dd-ee-ff" or "aa:bb:cc:dd:ee:ff" */
     if (!serial || CFGetTypeID(serial) != CFStringGetTypeID() ||
         !CFStringGetCString(serial, buf, sizeof(buf), kCFStringEncodingUTF8) ||
-        strlen(buf) != 17) {
+        strlen(buf) != SERIAL_LEN) {
         snprintf(serial_number, size, "00:00:00:00:00:00");
         return;
     }
 
     /* Replace dashes with colons if needed, uppercase */
-    for (size_t i = 0; i < 17; i++) {
+    for (size_t i = 0; i < SERIAL_LEN; i++) {
         buf[i] = buf[i] == '-' ? ':' : toupper((unsigned char)buf[i]);
     }
     snprintf(serial_number, size, "%s", buf);
@@ -39,8 +42,8 @@ static void iokit_device_added(void *context, IOReturn result, void *sender, IOH
     (void)sender;
 
     struct monitor_context *monitor = context;
-    char serial_number[18];
-    get_serial_from_hid_device(device, serial_number, sizeof(serial_number));
+    char serial_number[SERIAL_LEN + 1];
+    get_serial_from_hid_device(device, sizeof(serial_number), serial_number);
     if (monitor->add_device) {
         monitor->add_device(serial_number);
     }
@@ -52,8 +55,8 @@ static void iokit_device_removed(void *context, IOReturn result, void *sender, I
     (void)sender;
 
     struct monitor_context *monitor = context;
-    char serial_number[18];
-    get_serial_from_hid_device(device, serial_number, sizeof(serial_number));
+    char serial_number[SERIAL_LEN + 1];
+    get_serial_from_hid_device(device, sizeof(serial_number), serial_number);
     if (monitor->remove_device) {
         monitor->remove_device(serial_number);
     }
